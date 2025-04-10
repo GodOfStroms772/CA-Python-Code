@@ -1,0 +1,115 @@
+from googleapiclient import discovery
+from oauth2client.client import GoogleCredentials
+import time
+
+PROJECT = 'ca1vmdeployment'
+ZONE = 'europe-west2-a'
+REGION = 'europe-west2'
+INSTANCE_NAME = 'testcreatevm'
+STATIC_IP_NAME = 'my-static-ip'
+FIREWALL_NAME = 'allow-http-ssh'
+
+def get_compute_service():
+    return discovery.build('compute', 'v1')
+
+def create_static_ip(compute):
+    print("Checking if static IP already exists...")
+    try:
+        address = compute.addresses().get(project=PROJECT, region=REGION, address=STATIC_IP_NAME).execute()
+        print("Static IP already exists. Reusing it.")
+        return address['address']
+    except:
+        print("Static IP not found. Creating a new one...")
+        address_body = {
+            'name': STATIC_IP_NAME,
+            'region': REGION
+        }
+        request = compute.addresses().insert(project=PROJECT, region=REGION, body=address_body)
+        response = request.execute()
+
+        while True:
+            result = compute.regionOperations().get(
+                project=PROJECT, region=REGION, operation=response['name']).execute()
+            if result['status'] == 'DONE':
+                break
+            time.sleep(1)
+
+        address = compute.addresses().get(project=PROJECT, region=REGION, address=STATIC_IP_NAME).execute()
+        return address['address']
+
+    
+
+def create_instance(compute, static_ip):
+    print("Creating VM instance...")
+    config = {
+        'name': INSTANCE_NAME,
+        'machineType': f"zones/{ZONE}/machineTypes/custom-2-8192",
+        'disks': [
+            {
+                'boot': True,
+                'autoDelete': True,
+                'initializeParams': {
+                    'sourceImage': "projects/ubuntu-os-cloud/global/images/family/ubuntu-2004-lts",
+                    'diskSizeGb': '250',
+                }
+            }
+        ],
+        'networkInterfaces': [{
+            'network': 'global/networks/default',
+            'accessConfigs': [{
+                'name': 'External NAT',
+                'type': 'ONE_TO_ONE_NAT',
+                'natIP': static_ip
+            }]
+        }],
+        'tags': {
+            'items': ['http-server', 'ssh']
+        }
+    }
+
+    return compute.instances().insert(
+        project=PROJECT,
+        zone=ZONE,
+        body=config).execute()
+
+def create_firewall_rule(compute):
+    print("Checking if firewall rule already exists...")
+    try:
+        existing_rule = compute.firewalls().get(project=PROJECT, firewall=FIREWALL_NAME).execute()
+        print(f"Firewall rule '{FIREWALL_NAME}' already exists. Skipping creation.")
+        return
+    except:
+        print(f"Firewall rule '{FIREWALL_NAME}' not found. Creating it...")
+
+    firewall_body = {
+        "name": FIREWALL_NAME,
+        "allowed": [
+            {"IPProtocol": "tcp", "ports": ["22"]},
+            {"IPProtocol": "tcp", "ports": ["80"]}
+        ],
+        "direction": "INGRESS",
+        "sourceRanges": ["0.0.0.0/0"],
+        "targetTags": ["http-server", "ssh"]
+    }
+
+    return compute.firewalls().insert(project=PROJECT, body=firewall_body).execute()
+
+
+def main():
+    compute = get_compute_service()
+
+    static_ip = create_static_ip(compute)
+    create_firewall_rule(compute)
+    op = create_instance(compute, static_ip)
+
+    print("Waiting for instance to be ready...")
+    while True:
+        result = compute.zoneOperations().get(
+            project=PROJECT, zone=ZONE, operation=op['name']).execute()
+        if result['status'] == 'DONE':
+            print("Instance created.")
+            break
+        time.sleep(2)
+
+if __name__ == '__main__':
+    main()
