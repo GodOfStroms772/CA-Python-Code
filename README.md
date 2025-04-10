@@ -16,7 +16,7 @@ pip install google-api-python-client google-auth google-auth-httplib2 google-aut
 
 gcloud auth application-default login
 
-gcloud auth application-default set-quota-project hardy-pattern-456119-p6
+gcloud auth application-default set-quota-project ca1vmdeployment
 
 
 Output and Troubleshooting
